@@ -225,17 +225,17 @@ async def send_daily_metrics():
     final_text = "\n".join(msg)
     print(final_text)  # Debug en consola
 
-    # if SLACK_WEBHOOK_URL:
-    #     async with httpx.AsyncClient(timeout=30.0) as client:
-    #         res = await client.post(
-    #             SLACK_WEBHOOK_URL,
-    #             json={"text": final_text},
-    #             headers={"Content-Type": "application/json"}
-    #         )
-    #         if res.status_code != 200:
-    #             print(f"[ERROR] Slack webhook falló: {res.status_code} — {res.text}")
-    #         else:
-    #             print("[OK] Mensaje enviado a Slack.")
+    if SLACK_WEBHOOK_URL:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(
+                SLACK_WEBHOOK_URL,
+                json={"text": final_text},
+                headers={"Content-Type": "application/json"}
+            )
+            if res.status_code != 200:
+                print(f"[ERROR] Slack webhook falló: {res.status_code} — {res.text}")
+            else:
+                print("[OK] Mensaje enviado a Slack.")
 
 if __name__ == "__main__":
     asyncio.run(send_daily_metrics())
