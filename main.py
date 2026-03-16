@@ -104,109 +104,84 @@ async def send_daily_metrics():
         ]
         raw_records, raw_entries, in_progress = await asyncio.gather(*tasks)
 
-    # 2. Procesamiento de DataFrames con LIMPIEZA
+    # 2. Procesamiento de DataFrames
     df_rec = pd.DataFrame([{
         "record_id": r["id"]["record_id"],
-        "name": extract_value(r["values"].get("name")),
-        "reference_3": str(extract_value(r["values"].get("reference_3")) or 'Other').strip(),
-        "stage": extract_value(r["values"].get("stage"))
+        "reference": str(extract_value(r["values"].get("reference_3")) or 'Other').strip()
     } for r in raw_records])
 
     df_ent = pd.DataFrame([{
         "record_id": e["parent_record_id"],
         "status": str(extract_value(e["entry_values"].get("status")) or 'Unknown').strip(),
-        "status_date": e["entry_values"].get("status", [{}])[0].get("active_from"),
-        "red_flags": [str(f).strip() for f in extract_multi_values(e["entry_values"].get("red_flags_form_7"))]
+        "reasons": [str(f).strip() for f in extract_multi_values(e["entry_values"].get("red_flags_form_7"))]
     } for e in raw_entries])
 
     df = pd.merge(df_rec, df_ent, on="record_id")
-    
-    # 3. Cálculos de tiempos y métricas
-    submitted = len(df)
-    day_num = get_day_number()
-    one_day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    
-    # Filtrar novedades de las últimas 24h
-    new_qualified = df[
-        (df['status'].isin(['Initial screening', 'First interaction', 'Deep dive'])) & 
-        (df['status_date'] >= one_day_ago)
-    ]
+    total_submitted = len(df)
+    total_combined = total_submitted + in_progress
 
-    # --- 1. PREPARACIÓN DE DATOS (Limpieza total) ---
-    df['status'] = df['status'].astype(str).str.strip()
-    st_counts = df['status'].value_counts()
-    
-    # --- 2. INICIO DEL MENSAJE ---
-    W = 50
+    # --- CONSTRUCCIÓN DEL MENSAJE ---
+    W = 45
     msg = []
-    msg.append("\n" + "═" * W)
-    msg.append(f"Open Call – Day {get_day_number()} Update")
-    msg.append("═" * W + "\n")
+    msg.append(f"*📊 Reporte Open Call - {datetime.now().strftime('%d/%m/%Y')}*")
+    msg.append("=" * W)
 
-    # Bloque: Resumen General
-    msg.append(f"Applications submitted: {len(df)}")
-    msg.append(f"Applications in progress: {in_progress}")
-    msg.append(f"Total interest (sum): {len(df) + in_progress}\n")
+    # Bloque 1: Totales
+    msg.append(f"✅ *Applications submitted:* {total_submitted}")
+    msg.append(f"⏳ *Applications in progress:* {in_progress}")
+    msg.append(f"🔥 *Total interest:* {total_combined}")
+    msg.append("-" * W)
 
-    # Bloque: Source Breakdown
-    msg.append("─" * W)
-    msg.append("Submitted Applications – Source Breakdown")
-    msg.append("─" * W)
-    sources = df['reference_3'].fillna('Other').value_counts()
-    for src, count in sources.items():
-        pct = (count / len(df) * 100) if len(df) > 0 else 0
-        msg.append(f"  {src}: {count} ({pct:.1f}%)")
-
-    # Bloque: Pipeline Status (ELIMINAMOS EL DESORDEN AQUÍ)
-    msg.append("\n" + "─" * W)
-    msg.append("Current Pipeline Status (Total)")
-    msg.append("─" * W)
-    estados_ordenados = [
-        'Not qualified', 'Contacted', 'Stand by', 'Initial screening', 
-        'First interaction', 'Deep dive', 'Pre-committee'
-    ]
-    for st in estados_ordenados:
-        msg.append(f"  {st}: {st_counts.get(st, 0)}")
-
-    # Bloque: Novedades últimas 24h
-    msg.append("\n" + "─" * W)
-    msg.append("New Qualified / In Play (last 24 h)")
-    msg.append("─" * W)
-    if not new_qualified.empty:
-        for _, row in new_qualified.iterrows():
-            msg.append(f"  {row['name']} → {row['status']}")
+    # Bloque 2: Source Breakdown (Reference 3)
+    msg.append("*📍 Sources (Reference 3)*")
+    if total_submitted > 0:
+        sources = df['reference'].value_counts()
+        for src, count in sources.items():
+            pct = (count / total_submitted) * 100
+            msg.append(f"• {src}: {count} ({pct:.1f}%)")
     else:
-        msg.append("  (none)")
+        msg.append("  (No data)")
+    msg.append("-" * W)
 
-    # Bloque: Red Flags (LIMPIEZA DE DUPLICADOS)
-    msg.append("\n" + "─" * W)
-    msg.append("Main Red Flags (Total)")
-    msg.append("─" * W)
-    
+    # Bloque 3: Status Breakdown
+    msg.append("*📈 Pipeline Status*")
+    if total_submitted > 0:
+        status_counts = df['status'].value_counts()
+        for st, count in status_counts.items():
+            pct = (count / total_submitted) * 100
+            msg.append(f"• {st}: {count} ({pct:.1f}%)")
+    else:
+        msg.append("  (No data)")
+    msg.append("-" * W)
+
+    # Bloque 4: Reasons / Red Flags Breakdown (basado en 'Not qualified')
+    msg.append("*🚩 Disqualification Reasons*")
     df_nq = df[df['status'] == 'Not qualified']
     if not df_nq.empty:
-        # Explode y limpieza de espacios en blanco
-        all_flags = df_nq['red_flags'].explode().dropna().astype(str).str.strip()
-        all_flags = all_flags[all_flags != ""] # Quitar strings vacíos
+        all_reasons = df_nq['reasons'].explode().dropna()
+        all_reasons = all_reasons[all_reasons != ""]
         
-        if not all_flags.empty:
-            top_flags = all_flags.value_counts()
-            for flag, count in top_flags.items():
-                pct = (count / len(df_nq) * 100)
-                msg.append(f"  {flag} ({pct:.1f}%)")
+        if not all_reasons.empty:
+            reason_counts = all_reasons.value_counts()
+            total_reasons = len(df_nq) # Porcentaje sobre el total de descalificados
+            for reason, count in reason_counts.items():
+                pct = (count / total_reasons) * 100
+                msg.append(f"• {reason}: {count} ({pct:.1f}%)")
         else:
-            msg.append("  (none)")
+            msg.append("  (No reasons specified)")
     else:
         msg.append("  (No applications disqualified yet)")
 
-    msg.append("\n" + "═" * W)
-    
-    # 5. Envío
+    msg.append("=" * W)
+
+    # 5. Envío a Slack
     final_text = "\n".join(msg)
-    print(final_text)
+    print(final_text) # Para debug en consola
     
     if SLACK_WEBHOOK_URL:
-        httpx.post(SLACK_WEBHOOK_URL, json={"text": f"```\n{final_text}\n```"})
+        # Enviamos como bloque de texto Markdown de Slack
+        async with httpx.AsyncClient() as client:
+            await client.post(SLACK_WEBHOOK_URL, json={"text": final_text})
 
 if __name__ == "__main__":
     asyncio.run(send_daily_metrics())
