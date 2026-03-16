@@ -117,10 +117,7 @@ async def send_daily_metrics():
             fetch_attio(
                 client,
                 f"https://api.attio.com/v2/objects/{DEALS_ID}/records/query",
-                payload={"filter": {"$or": [
-                    {"stage": {"$eq": "Menorca 2026"}},
-                    {"stage": {"$eq": "Leads Menorca 2026"}}
-                ]}}
+                payload={"filter": {"stage": {"$eq": "Menorca 2026"}}}
             ),
             fetch_attio(client, f"https://api.attio.com/v2/lists/{DEAL_FLOW_ID}/entries/query"),
             fetch_typebot(client)
