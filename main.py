@@ -104,61 +104,70 @@ async def send_daily_metrics():
         ]
         raw_records, raw_entries, in_progress = await asyncio.gather(*tasks)
 
-    # 2. Transformar a DataFrames
+    # 2. Procesamiento de DataFrames con LIMPIEZA
     df_rec = pd.DataFrame([{
         "record_id": r["id"]["record_id"],
         "name": extract_value(r["values"].get("name")),
-        "reference_3": extract_value(r["values"].get("reference_3")),
+        "reference_3": str(extract_value(r["values"].get("reference_3")) or 'Other').strip(),
         "stage": extract_value(r["values"].get("stage"))
     } for r in raw_records])
 
     df_ent = pd.DataFrame([{
         "record_id": e["parent_record_id"],
-        "status": extract_value(e["entry_values"].get("status")),
+        "status": str(extract_value(e["entry_values"].get("status")) or 'Unknown').strip(),
         "status_date": e["entry_values"].get("status", [{}])[0].get("active_from"),
-        "red_flags": extract_multi_values(e["entry_values"].get("red_flags_form_7"))
+        "red_flags": [str(f).strip() for f in extract_multi_values(e["entry_values"].get("red_flags_form_7"))]
     } for e in raw_entries])
 
     df = pd.merge(df_rec, df_ent, on="record_id")
     
-    # 3. Cálculos
+    # 3. Cálculos de tiempos y métricas
     submitted = len(df)
-    total = submitted + in_progress
     day_num = get_day_number()
-    
-    # Novedades últimas 24h
     one_day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    
+    # Filtrar novedades de las últimas 24h
     new_qualified = df[
         (df['status'].isin(['Initial screening', 'First interaction', 'Deep dive'])) & 
         (df['status_date'] >= one_day_ago)
     ]
 
-    # 4. Construir Mensaje Visual (Idéntico al original)
+    # 4. CONSTRUCCIÓN DEL MENSAJE (Ordenado y Limpio)
     W = 50
     msg = []
     msg.append("\n" + "═" * W)
     msg.append(f"Open Call – Day {day_num} Update")
     msg.append("═" * W + "\n")
 
+    # Bloque 1: Resumen General
     msg.append(f"Applications submitted: {submitted}")
     msg.append(f"Applications in progress: {in_progress}")
-    msg.append(f"Total applications (submitted + in progress): {total}\n")
+    msg.append(f"Total interest (sum): {submitted + in_progress}\n")
 
+    # Bloque 2: Source Breakdown (Real / Acumulado)
     msg.append("─" * W)
     msg.append("Submitted Applications – Source Breakdown")
     msg.append("─" * W)
-    sources = df['reference_3'].fillna('Other').value_counts()
+    sources = df['reference_3'].value_counts()
     for src, count in sources.items():
         pct = (count / submitted * 100) if submitted > 0 else 0
         msg.append(f"  {src}: {count} ({pct:.1f}%)")
 
+    # Bloque 3: Pipeline Status (Real / Acumulado)
     msg.append("\n" + "─" * W)
+    msg.append("Current Pipeline Status (Total)")
+    msg.append("─" * W)
     st_counts = df['status'].value_counts()
-    for st in ['Not qualified', 'Contacted', 'Stand by', 'Initial screening', 'First interaction', 'Deep dive', 'Pre-committee']:
-        msg.append(f"{st}: {st_counts.get(st, 0)}")
+    estados_ordenados = [
+        'Not qualified', 'Contacted', 'Stand by', 'Initial screening', 
+        'First interaction', 'Deep dive', 'Pre-committee'
+    ]
+    for st in estados_ordenados:
+        msg.append(f"  {st}: {st_counts.get(st, 0)}")
 
+    # Bloque 4: Novedades últimas 24h
     msg.append("\n" + "─" * W)
-    msg.append("New Initial screening / First interaction / Deep dive (last 24 h)")
+    msg.append("New Qualified / In Play (last 24 h)")
     msg.append("─" * W)
     if not new_qualified.empty:
         for _, row in new_qualified.iterrows():
@@ -166,19 +175,29 @@ async def send_daily_metrics():
     else:
         msg.append("  (none)")
 
+    # Bloque 5: Análisis de Red Flags (Solo de los Not Qualified)
     msg.append("\n" + "─" * W)
-    msg.append("Main Red Flags")
+    msg.append("Main Red Flags (Total)")
     msg.append("─" * W)
-    all_flags = df[df['status'] == 'Not qualified']['red_flags'].explode()
-    if not all_flags.empty:
-        top_flags = all_flags.value_counts()
-        nq_total = len(df[df['status'] == 'Not qualified'])
-        for flag, count in top_flags.items():
-            pct = (count / nq_total * 100)
-            msg.append(f"  {flag} ({pct:.1f}%)")
+    
+    df_nq = df[df['status'] == 'Not qualified']
+    if not df_nq.empty:
+        all_flags = df_nq['red_flags'].explode()
+        all_flags = all_flags[all_flags != ''] # Eliminar vacíos
+        if not all_flags.empty:
+            top_flags = all_flags.value_counts()
+            nq_total = len(df_nq)
+            for flag, count in top_flags.items():
+                pct = (count / nq_total * 100)
+                msg.append(f"  {flag} ({pct:.1f}%)")
+        else:
+            msg.append("  (No red flags defined)")
+    else:
+        msg.append("  (No applications disqualified yet)")
 
     msg.append("\n" + "═" * W)
     
+    # 5. Envío
     final_text = "\n".join(msg)
     print(final_text)
     
