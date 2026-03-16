@@ -132,32 +132,35 @@ async def send_daily_metrics():
         (df['status_date'] >= one_day_ago)
     ]
 
-    # 4. CONSTRUCCIÓN DEL MENSAJE (Ordenado y Limpio)
+    # --- 1. PREPARACIÓN DE DATOS (Limpieza total) ---
+    df['status'] = df['status'].astype(str).str.strip()
+    st_counts = df['status'].value_counts()
+    
+    # --- 2. INICIO DEL MENSAJE ---
     W = 50
     msg = []
     msg.append("\n" + "═" * W)
-    msg.append(f"Open Call – Day {day_num} Update")
+    msg.append(f"Open Call – Day {get_day_number()} Update")
     msg.append("═" * W + "\n")
 
-    # Bloque 1: Resumen General
-    msg.append(f"Applications submitted: {submitted}")
+    # Bloque: Resumen General
+    msg.append(f"Applications submitted: {len(df)}")
     msg.append(f"Applications in progress: {in_progress}")
-    msg.append(f"Total interest (sum): {submitted + in_progress}\n")
+    msg.append(f"Total interest (sum): {len(df) + in_progress}\n")
 
-    # Bloque 2: Source Breakdown (Real / Acumulado)
+    # Bloque: Source Breakdown
     msg.append("─" * W)
     msg.append("Submitted Applications – Source Breakdown")
     msg.append("─" * W)
-    sources = df['reference_3'].value_counts()
+    sources = df['reference_3'].fillna('Other').value_counts()
     for src, count in sources.items():
-        pct = (count / submitted * 100) if submitted > 0 else 0
+        pct = (count / len(df) * 100) if len(df) > 0 else 0
         msg.append(f"  {src}: {count} ({pct:.1f}%)")
 
-    # Bloque 3: Pipeline Status (Real / Acumulado)
+    # Bloque: Pipeline Status (ELIMINAMOS EL DESORDEN AQUÍ)
     msg.append("\n" + "─" * W)
     msg.append("Current Pipeline Status (Total)")
     msg.append("─" * W)
-    st_counts = df['status'].value_counts()
     estados_ordenados = [
         'Not qualified', 'Contacted', 'Stand by', 'Initial screening', 
         'First interaction', 'Deep dive', 'Pre-committee'
@@ -165,7 +168,7 @@ async def send_daily_metrics():
     for st in estados_ordenados:
         msg.append(f"  {st}: {st_counts.get(st, 0)}")
 
-    # Bloque 4: Novedades últimas 24h
+    # Bloque: Novedades últimas 24h
     msg.append("\n" + "─" * W)
     msg.append("New Qualified / In Play (last 24 h)")
     msg.append("─" * W)
@@ -175,23 +178,24 @@ async def send_daily_metrics():
     else:
         msg.append("  (none)")
 
-    # Bloque 5: Análisis de Red Flags (Solo de los Not Qualified)
+    # Bloque: Red Flags (LIMPIEZA DE DUPLICADOS)
     msg.append("\n" + "─" * W)
     msg.append("Main Red Flags (Total)")
     msg.append("─" * W)
     
     df_nq = df[df['status'] == 'Not qualified']
     if not df_nq.empty:
-        all_flags = df_nq['red_flags'].explode()
-        all_flags = all_flags[all_flags != ''] # Eliminar vacíos
+        # Explode y limpieza de espacios en blanco
+        all_flags = df_nq['red_flags'].explode().dropna().astype(str).str.strip()
+        all_flags = all_flags[all_flags != ""] # Quitar strings vacíos
+        
         if not all_flags.empty:
             top_flags = all_flags.value_counts()
-            nq_total = len(df_nq)
             for flag, count in top_flags.items():
-                pct = (count / nq_total * 100)
+                pct = (count / len(df_nq) * 100)
                 msg.append(f"  {flag} ({pct:.1f}%)")
         else:
-            msg.append("  (No red flags defined)")
+            msg.append("  (none)")
     else:
         msg.append("  (No applications disqualified yet)")
 
